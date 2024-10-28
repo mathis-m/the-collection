@@ -19,7 +19,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
-import com.intellij.psi.util.childLeafs
 import com.intellij.psi.util.elementType
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
@@ -197,7 +196,8 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
         PsiTreeUtil.findChildOfType(containingFile.lastChild, JSStringTemplateExpression::class.java)
 
       val templateContentElement =
-        templateStringExpression?.childLeafs()?.toList()?.find { it.elementType == JSTokenTypes.STRING_TEMPLATE_PART }
+        PsiTreeUtil.collectElements(templateStringExpression) { it.elementType == JSTokenTypes.STRING_TEMPLATE_PART}.firstOrNull()
+      //templateStringExpression?.childLeafs()?.toList()?.find { it.elementType == JSTokenTypes.STRING_TEMPLATE_PART }
 
 
       if (templateContentElement != null) {
@@ -206,134 +206,6 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
       }
 
     }
-
-
-    /*
-
-
-    // Get the parent of the "?" element in the ternary statement to find the conditional expression that contains it
-    var conditionalExpression: PsiConditionalExpression? =
-      PsiTreeUtil.getParentOfType(element, PsiConditionalExpression::class.java, false)
-    if (conditionalExpression == null) {
-      return
-    }
-    // Verify the conditional expression exists and has two outcomes in the ternary statement.
-    val thenExpression: PsiExpression? = conditionalExpression.getThenExpression()
-    val elseExpression: PsiExpression? = conditionalExpression.getElseExpression()
-    if (thenExpression == null || elseExpression == null) {
-      return
-    }
-
-    // Keep searching up the PSI Tree in case the ternary is part of a FOR statement.
-    var originalStatement: PsiElement? = PsiTreeUtil.getParentOfType(
-      conditionalExpression, PsiStatement::class.java, false
-    )
-    while (originalStatement is PsiForStatement) {
-      originalStatement = PsiTreeUtil.getParentOfType(originalStatement, PsiStatement::class.java, true)
-    }
-    if (originalStatement == null) {
-      return
-    }
-
-    // If the original statement is a declaration based on a ternary operator,
-    // split the declaration and assignment
-    if (originalStatement is PsiDeclarationStatement) {
-      // Find the local variable within the declaration statement
-      val declaredElements: Array<PsiElement> = originalStatement.getDeclaredElements()
-      var variable: PsiLocalVariable? = null
-      for (declaredElement: PsiElement? in declaredElements) {
-        if (declaredElement is PsiLocalVariable && PsiTreeUtil.isAncestor(
-            declaredElement,
-            conditionalExpression,
-            true
-          )
-        ) {
-          variable = declaredElement as PsiLocalVariable
-          break
-        }
-      }
-      if (variable == null) {
-        return
-      }
-
-      // Ensure that the variable declaration is not combined with other declarations, and add a mark
-      variable.normalizeDeclaration()
-      val marker: Any = Any()
-      PsiTreeUtil.mark(conditionalExpression, marker)
-
-      // Create a new expression to declare the local variable
-      var statement: PsiExpressionStatement =
-        factory.createStatementFromText(variable.getName() + " = 0;", null) as PsiExpressionStatement
-      statement = codeStylist.reformat(statement) as PsiExpressionStatement
-
-      // Replace initializer with the ternary expression, making an assignment statement using the ternary
-      val rExpression: PsiExpression? = (statement.getExpression() as PsiAssignmentExpression).getRExpression()
-      val variableInitializer: PsiExpression? = variable.getInitializer()
-      if (rExpression == null || variableInitializer == null) {
-        return
-      }
-      rExpression.replace(variableInitializer)
-
-      // Remove the initializer portion of the local variable statement,
-      // making it a declaration statement with no initializer
-      variableInitializer.delete()
-
-      // Get the grandparent of the local var declaration, and add the new declaration just beneath it
-      val variableParent: PsiElement = variable.getParent()
-      originalStatement = variableParent.getParent().addAfter(statement, variableParent)
-      conditionalExpression = PsiTreeUtil.releaseMark(originalStatement, marker) as PsiConditionalExpression?
-    }
-    if (conditionalExpression == null) {
-      return
-    }
-
-    // Create an IF statement from a string with placeholder elements.
-    // This will replace the ternary statement
-    var newIfStmt: PsiIfStatement =
-      factory.createStatementFromText("if (true) {a=b;} else {c=d;}", null) as PsiIfStatement
-    newIfStmt = codeStylist.reformat(newIfStmt) as PsiIfStatement
-
-    // Replace the conditional expression with the one from the original ternary expression
-    val condition: PsiReferenceExpression = conditionalExpression.getCondition().copy() as PsiReferenceExpression
-    val newIfStmtCondition: PsiExpression? = newIfStmt.getCondition()
-    if (newIfStmtCondition == null) {
-      return
-    }
-    newIfStmtCondition.replace(condition)
-
-    // Begin building the assignment string for the THEN and ELSE clauses using the
-    // parent of the ternary conditional expression
-    val assignmentExpression: PsiAssignmentExpression? =
-      PsiTreeUtil.getParentOfType(conditionalExpression, PsiAssignmentExpression::class.java, false)
-    if (assignmentExpression == null) {
-      return
-    }
-    // Get the contents of the assignment expression up to the start of the ternary expression
-    val exprFrag: String =
-      (assignmentExpression.getLExpression().getText() + assignmentExpression.getOperationSign().getText())
-
-    // Build the THEN statement string for the new IF statement,
-    // make a PsiExpressionStatement from the string, and switch the placeholder
-    val thenStr: String = (exprFrag + thenExpression.getText()).toString() + ";"
-    val thenStmt: PsiExpressionStatement = factory.createStatementFromText(thenStr, null) as PsiExpressionStatement
-    val thenBranch: PsiBlockStatement? = newIfStmt.getThenBranch() as PsiBlockStatement?
-    if (thenBranch == null) {
-      return
-    }
-    thenBranch.getCodeBlock().getStatements().get(0).replace(thenStmt)
-
-    // Build the ELSE statement string for the new IF statement,
-    // make a PsiExpressionStatement from the string, and switch the placeholder
-    val elseStr: String = (exprFrag + elseExpression.getText()).toString() + ";"
-    val elseStmt: PsiExpressionStatement = factory.createStatementFromText(elseStr, null) as PsiExpressionStatement
-    val elseBranch: PsiBlockStatement? = newIfStmt.getElseBranch() as PsiBlockStatement?
-    if (elseBranch == null) {
-      return
-    }
-    elseBranch.getCodeBlock().getStatements().get(0).replace(elseStmt)
-
-    // Replace the entire original statement with the new IF
-    originalStatement.replace(newIfStmt)*/
   }
 
   /**
