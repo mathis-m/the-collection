@@ -1,0 +1,7 @@
+const MyButton = () => {
+  return (
+    <spot><button</spot> style={{ color: "red" }}>
+      My Button
+    <spot></button></spot>
+  );
+};

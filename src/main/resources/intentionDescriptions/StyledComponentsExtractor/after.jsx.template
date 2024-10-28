@@ -1,0 +1,13 @@
+import styled from "styled-components";
+
+const MyButton = () => {
+  return (
+    <StyledButton>
+      My Button
+    </StyledButton>
+  );
+};
+
+const StyledButton = styled.button`
+  color: red;
+`;
