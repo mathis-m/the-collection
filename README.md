@@ -5,7 +5,10 @@
 
 <!-- [![Version](https://img.shields.io/jetbrains/plugin/v/25687-the-collection.svg)](https://plugins.jetbrains.com/plugin/25687-the-collection) -->
 
-This plugin collection currently contains: Styled Components Extract Intention, more to come. 
+<!-- Plugin description -->
+This plugin collection currently contains:
+- Styled Components Extract Intention, more to come. 
+<!-- Plugin description end -->
 
 ## Installation
 
