@@ -4,30 +4,41 @@ import com.github.mathism.thecollection.helpers.DummyFileFactory
 import com.github.mathism.thecollection.helpers.isFragment
 import com.github.mathism.thecollection.helpers.isJsxIntrinsicElement
 import com.intellij.application.options.CodeStyle
+import com.intellij.codeInsight.CodeInsightUtilCore
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.codeInsight.intention.PsiElementBaseIntentionAction
 import com.intellij.codeInsight.intention.preview.IntentionPreviewInfo
+import com.intellij.codeInsight.template.*
+import com.intellij.codeInsight.template.impl.TemplateManagerImpl
+import com.intellij.codeInsight.template.impl.TemplateState
+import com.intellij.codeInsight.template.impl.TextExpression
 import com.intellij.lang.ecmascript6.JSXHarmonyFileType
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.TypeScriptJSXFileType
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.command.impl.FinishMarkAction
+import com.intellij.openapi.command.impl.StartMarkAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFile
+import com.intellij.psi.*
+import com.intellij.psi.impl.source.tree.injected.InjectedLanguageEditorUtil
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
+import com.intellij.psi.util.endOffset
+import com.intellij.psi.util.startOffset
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
 import com.intellij.util.IncorrectOperationException
 import com.intellij.webSymbols.utils.NameCaseUtils
 import org.jetbrains.annotations.NonNls
+
 
 /**
  * Implements an intention action to replace a ternary statement with if-then-else.
@@ -86,41 +97,144 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
     override fun invoke(project: Project, editor: Editor?, element: PsiElement) {
         if (editor == null) return
 
-        // Get the factory for making new PsiElements, and the code style manager to format new statements
         val containingFile = element.containingFile
-        val codeStyleSettings = CodeStyle.getSettings(containingFile)
-
         val tag = PsiTreeUtil.getParentOfType(element, XmlTag::class.java, false) ?: return
-
         val defaultStyledName = "Styled${NameCaseUtils.toPascalCase(tag.name)}"
 
-        var userDefinedName = Messages.showInputDialog(
-            "Enter the name for the new styled component",
-            "Styled Component Name",
-            Messages.getQuestionIcon(),
-            defaultStyledName,
-            null
-        ) ?: defaultStyledName
-
-        userDefinedName = if (userDefinedName.isBlank()) {
-            defaultStyledName
-        } else {
-            NameCaseUtils.toPascalCase(userDefinedName)
+        WriteCommandAction.runWriteCommandAction(project) {
+            val targetFile = tag.containingFile
+            extractStyledComponent(project, targetFile, tag, defaultStyledName)
         }
 
-        WriteCommandAction.runWriteCommandAction(project) {
-            extractStyledComponent(project, tag.containingFile, tag, userDefinedName)
+        var varStatement = containingFile.lastChild
+        varStatement = CodeInsightUtilCore.forcePsiPostprocessAndRestoreElement(varStatement) ?: return
+        if (varStatement !is JSVarStatement) {
+            return
+        }
+        val tsVariable = varStatement.variables.firstOrNull() ?: return
+        val nameIdentifier = tsVariable.nameIdentifier ?: return
 
-            val templateStringExpression =
-                PsiTreeUtil.findChildOfType(containingFile.lastChild, JSStringTemplateExpression::class.java)
+        editor.caretModel.moveToOffset(nameIdentifier.startOffset)
+        editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
 
-            val templateContentElement =
-                PsiTreeUtil.collectElements(templateStringExpression) { it.elementType == JSTokenTypes.STRING_TEMPLATE_PART }
-                    .firstOrNull()
+        var scope = PsiTreeUtil.findCommonParent(tsVariable, tag)
+        val context: PsiElement? =
+            InjectedLanguageManager.getInstance(containingFile.project).getInjectionHost(containingFile)
+        val topLevelEditor = InjectedLanguageEditorUtil.getTopLevelEditor(editor)
+        scope = (if (context != null && topLevelEditor !== editor) context.containingFile else scope) as PsiElement
 
-            if (templateContentElement != null) {
-                editor.caretModel.moveToOffset(templateContentElement.textOffset + 1 + codeStyleSettings.indentOptions.INDENT_SIZE)
-                editor.scrollingModel.scrollToCaret(ScrollType.CENTER_UP)
+        val builder = TemplateBuilderImpl(scope)
+
+        val tagNames = tag.children.filter { it is XmlToken && it.tokenType == XmlTokenType.XML_TAG_NAME }
+        for ((index, tagName) in tagNames.withIndex()) {
+            builder.replaceElement(
+                tag, tagName.textRangeInParent, "OtherVariable_$index", "PrimaryVariable", false
+            )
+        }
+
+        builder.replaceElement(
+            tsVariable, nameIdentifier.textRangeInParent, "PrimaryVariable", TextExpression(defaultStyledName), true
+        )
+
+        val markAction = StartMarkAction.start(editor, project, "Styled Components Extractor")
+        val caretRangeMarker = editor.document.createRangeMarker(
+            editor.caretModel.offset, editor.caretModel.offset
+        )
+        caretRangeMarker.isGreedyToLeft = true
+        caretRangeMarker.isGreedyToRight = true
+
+        WriteCommandAction.writeCommandAction(project).withName("Styled Components Extractor").run<RuntimeException> {
+            val range = scope.textRange
+
+            val rangeMarker = topLevelEditor.document.createRangeMarker(range)
+            val template = builder.buildInlineTemplate()
+            template.isToShortenLongNames = false
+            template.isToReformat = false
+            topLevelEditor.caretModel.moveToOffset(rangeMarker.startOffset)
+            TemplateManager.getInstance(project)
+                .startTemplate(topLevelEditor, template, object : TemplateEditingAdapter() {
+                    override fun templateCancelled(template: Template?) {
+                        try {
+                            val documentManager = PsiDocumentManager.getInstance(project)
+                            documentManager.commitAllDocuments()
+                        } finally {
+                            FinishMarkAction.finish(
+                                project, editor, markAction
+                            )
+                        }
+                    }
+
+                    override fun templateFinished(template: Template, brokenOff: Boolean) {
+                        val templateStringExpression =
+                            PsiTreeUtil.findChildOfType(varStatement, JSStringTemplateExpression::class.java)
+                        val templateContentElement =
+                            PsiTreeUtil.collectElements(templateStringExpression) { it.elementType == JSTokenTypes.STRING_TEMPLATE_PART }
+                                .firstOrNull()
+
+                        if (templateContentElement != null) {
+                            editor.caretModel.moveToOffset(templateContentElement.endOffset - 1 - placeholderText.length)
+                            editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
+
+                            editor.selectionModel.setSelection(
+                                templateContentElement.endOffset - 1 - placeholderText.length,
+                                templateContentElement.endOffset - 1
+                            )
+                        }
+
+                        FinishMarkAction.finish(
+                            project, editor, markAction
+                        )
+                    }
+
+                    override fun beforeTemplateFinished(state: TemplateState, template: Template?, brokenOff: Boolean) {
+                        fixVarNamesIfNeeded(template, state, editor)
+                    }
+
+                    private fun fixVarNamesIfNeeded(
+                        template: Template?,
+                        state: TemplateState,
+                        editor: Editor
+                    ) {
+                        if (template == null) return
+
+                        val userDefinedName = state.getVariableValue("PrimaryVariable")
+                        if (userDefinedName == null || userDefinedName.toString().isBlank()) {
+                            val vars = template.variables
+                            for (variable in vars) {
+                                val varRange = state.getVariableRange(variable.name) ?: continue
+                                WriteCommandAction.runWriteCommandAction(
+                                    project
+                                ) {
+                                    editor.document.replaceString(
+                                        varRange.startOffset, varRange.endOffset, defaultStyledName
+                                    )
+                                }
+                            }
+
+                            return
+                        }
+
+                        val userDefinedNamePascalCase = NameCaseUtils.toPascalCase(userDefinedName.toString())
+                        if (userDefinedName.toString() != userDefinedNamePascalCase) {
+                            val vars = template.variables
+                            for (variable in vars) {
+                                val varRange = state.getVariableRange(variable.name) ?: continue
+
+                                WriteCommandAction.runWriteCommandAction(
+                                    project
+                                ) {
+                                    editor.document.replaceString(
+                                        varRange.startOffset, varRange.endOffset, userDefinedNamePascalCase
+                                    )
+                                }
+                            }
+                        }
+                    }
+                })
+
+            val templateState = TemplateManagerImpl.getTemplateState(topLevelEditor)
+            if (templateState != null) {
+                DaemonCodeAnalyzer.getInstance(project).disableUpdateByTimer(templateState)
             }
         }
     }
@@ -156,12 +270,10 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
         val dummyContent = generateNewPsiString(variableName, tag, originalTagName, indent, styledImportIdentifier)
         val dummyFile = DummyFileFactory.createFile(project, fileType, dummyContent)
 
-        val styledComponentDeclaration =
-            PsiTreeUtil.findChildOfType(dummyFile, JSVarStatement::class.java) ?: return
+        val styledComponentDeclaration = PsiTreeUtil.findChildOfType(dummyFile, JSVarStatement::class.java) ?: return
         val renamedTag = PsiTreeUtil.findChildOfType(dummyFile, XmlTag::class.java) ?: return
         val renamedTagToken =
-            renamedTag.children.find { it is XmlToken && it.tokenType == XmlTokenType.XML_TAG_NAME }
-                ?: return
+            renamedTag.children.find { it is XmlToken && it.tokenType == XmlTokenType.XML_TAG_NAME } ?: return
 
         val importElement = if (existingStyledComponentsImport != null) {
             null
@@ -182,11 +294,7 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
     }
 
     private fun generateNewPsiString(
-        variableName: String,
-        tag: XmlTag,
-        originalTagName: String,
-        indent: String,
-        styledImportIdentifier: String?
+        variableName: String, tag: XmlTag, originalTagName: String, indent: String, styledImportIdentifier: String?
     ): String {
         val sb = StringBuilder()
 
@@ -202,12 +310,11 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
             "const $variableName = ${styledImportIdentifier ?: "styled"}"
         )
 
-
         if (tag.isJsxIntrinsicElement) {
             sb.appendLine(
                 """
               |.${originalTagName}`
-              |$indent
+              |${indent}$placeholderText
               |`;
             """.trimMargin()
             )
@@ -215,7 +322,7 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
             sb.appendLine(
                 """
               |(${originalTagName})`
-              |$indent
+              |${indent}$placeholderText
               |`;
             """.trimMargin()
             )
@@ -259,4 +366,6 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
     override fun getText(): String {
         return "Extract styled component"
     }
+
+    private val placeholderText = """// TODO: add styling"""
 }
