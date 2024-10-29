@@ -2,6 +2,7 @@
 <idea-plugin>
   <id>com.github.mathism.thecollection</id>
   <name>The Collection</name>
+  <description>This plugin contains an intention to speed up the creation of styled components.</description>
   <vendor>mathis-m</vendor>
   <depends>JavaScript</depends>
   <depends>com.intellij.modules.platform</depends>
