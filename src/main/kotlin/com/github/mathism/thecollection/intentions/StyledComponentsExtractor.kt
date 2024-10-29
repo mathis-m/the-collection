@@ -30,8 +30,6 @@ import com.intellij.psi.*
 import com.intellij.psi.impl.source.tree.injected.InjectedLanguageEditorUtil
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
-import com.intellij.psi.util.endOffset
-import com.intellij.psi.util.startOffset
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
@@ -114,7 +112,7 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
         val tsVariable = varStatement.variables.firstOrNull() ?: return
         val nameIdentifier = tsVariable.nameIdentifier ?: return
 
-        editor.caretModel.moveToOffset(nameIdentifier.startOffset)
+        editor.caretModel.moveToOffset(nameIdentifier.textOffset)
         editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
 
         var scope = PsiTreeUtil.findCommonParent(tsVariable, tag)
@@ -172,12 +170,12 @@ class StyledComponentsExtractor : PsiElementBaseIntentionAction(), IntentionActi
                                 .firstOrNull()
 
                         if (templateContentElement != null) {
-                            editor.caretModel.moveToOffset(templateContentElement.endOffset - 1 - placeholderText.length)
+                            editor.caretModel.moveToOffset(templateContentElement.textRange.endOffset - 1 - placeholderText.length)
                             editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
 
                             editor.selectionModel.setSelection(
-                                templateContentElement.endOffset - 1 - placeholderText.length,
-                                templateContentElement.endOffset - 1
+                                templateContentElement.textRange.endOffset - 1 - placeholderText.length,
+                                templateContentElement.textRange.endOffset - 1
                             )
                         }
 
